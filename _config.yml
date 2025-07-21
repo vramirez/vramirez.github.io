@@ -6,13 +6,13 @@
 # https://learn-the-web.algonquindesign.ca/topics/markdown-yaml-cheat-sheet/#yaml
 # https://learnxinyminutes.com/docs/yaml/
 
-title: VicData Blog
-description: This blog is dedicated to data science and data engineering
+title: Victor Ramirez
+description: Data & ML Engineer | Portfolio & Blog
 github_username: vramirez
 
 # Email and twitter are optional:
 email: ramirez.vmanuel@gmail.com
-twitter_username: bikthor
+twitter_username: vmramirez85
 
 # Set this to true to get LaTeX math equation support
 use_math: 
