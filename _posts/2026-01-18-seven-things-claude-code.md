@@ -10,6 +10,8 @@ There's a difference between using a tool and learning to work with one.
 
 A carpenter doesn't simply *use* a chisel—she develops a feel for it. The angle of approach, the pressure required for different grains, the subtle feedback through the handle that tells her when the wood is about to split. This knowledge doesn't come from reading the manual. It comes from hours of quiet attention, from failures that teach more than successes, from gradually understanding the tool's nature rather than fighting against it.
 
+![Craftsman working with wood](https://www.westrivereagle.com/wp-content/uploads/2020/08/N1905P34006H-scaled.jpg)
+
 I've spent the last several months working with Claude Code as part of my daily development workflow. What started as curiosity became habit, and habit became something I'd describe as collaboration. Along the way, I've accumulated some hard-won intuitions about what makes this particular relationship productive.
 
 These aren't tricks or hacks. They're more like principles—patterns I return to when things aren't working, reminders of what I've learned works best.
