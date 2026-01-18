@@ -6,7 +6,7 @@ categories: [tools, ai, development]
 tags: [claude, ai-assisted-development, productivity, workflow]
 ---
 
-There's a difference between using a tool and learning to work with one.
+There's quite a difference between using a tool and learning to work with one.
 
 A carpenter doesn't simply *use* a chisel—she develops a feel for it. The angle of approach, the pressure required for different grains, the subtle feedback through the handle that tells her when the wood is about to split. This knowledge doesn't come from reading the manual. It comes from hours of quiet attention, from failures that teach more than successes, from gradually understanding the tool's nature rather than fighting against it.
 
