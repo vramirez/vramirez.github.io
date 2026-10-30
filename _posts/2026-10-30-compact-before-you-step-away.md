@@ -14,32 +14,59 @@ It looks like housekeeping, but it saves real money. The reason has to do with s
 
 ## Every turn re-reads everything
 
-The model doesn't remember anything between turns. What looks like a conversation is really the whole transcript being sent again on every request. That means every message, every file it read, every tool output, and every long stack trace you pasted in at 11pm.
+The model doesn't remember anything between turns. What looks like a conversation is really the whole transcript being sent again on every request. The [prompt caching docs](https://code.claude.com/docs/en/prompt-caching) spell it out: system prompt, project context, every prior message and tool result, and then your new message.
 
-So once a session reaches 400,000 tokens, typing "thanks, that worked" makes the model process 400,000 tokens of history before it reads your four words.
+So once a session reaches 300,000 tokens, typing "thanks, that worked" makes the model process 300,000 tokens of history before it reads your four words.
 
 In my head a chat feels like a phone call, with the context just sitting there in the room. In practice it's closer to sending a letter with the whole correspondence stapled to the front, every time.
 
 ## The cache is what makes this bearable
 
-Reprocessing everything on every turn would be painfully expensive, so there's prompt caching. When a request starts with the same text as a recent one, the provider can reuse the work it already did on that shared prefix. Reading from the cache costs a small fraction of normal input.
+Reprocessing everything on every turn would be painfully expensive, so there's prompt caching. When a request starts with the same text as a recent one, the API reuses the work it already did on that shared prefix. Reading from the cache costs a small fraction of normal input.
 
-Here are the numbers for Claude Opus 5.5, from the current pricing:
+Here are the numbers for Claude Opus 5.5, from the [official pricing page](https://platform.claude.com/docs/en/about-claude/pricing):
 
 | | Price per million tokens |
 |---|---|
 | Normal input | $4.00 |
 | Cache read | $0.20 (5% of input) |
-| Cache write, 5-minute TTL | 1.25x input = $5.00 |
-| Cache write, 1-hour TTL | 2x input = $8.00 |
+| Cache write, 5-minute TTL | $5.00 (1.25x input) |
+| Cache write, 1-hour TTL | $8.00 (2x input) |
 
-The catch is in the last two rows. **The cache expires.** Entries have a time-to-live: 5 minutes by default, or an hour if the cache entry asks for the longer TTL. Each request that reads the cache resets its timer. As long as you keep talking, the cache stays warm and every turn costs very little.
+The catch is in the last two rows. **The cache expires.** Entries have a time-to-live, and each request that reads the cache resets its timer. As long as you keep talking, the cache stays warm and every turn costs very little.
+
+Which TTL you get depends on how you pay. According to the docs, Claude Code asks for the **one-hour** TTL for your main conversation when you're on a Claude subscription and within your plan's usage. With an API key, a cloud provider, or once you've spilled over into usage credits, it drops to **five minutes**. You can override either one with the [`promptCacheTtl`](https://code.claude.com/docs/en/settings-reference#promptcachettl) setting.
+
+I didn't want to take that on faith, so I checked my own transcripts. Claude Code keeps them as JSONL files under `~/.claude/projects/`, and every assistant message records its cache usage:
+
+```python
+import json, glob, collections
+
+ttl = collections.Counter()
+for path in glob.glob("/home/me/.claude/projects/*/*.jsonl"):
+    for line in open(path, errors="ignore"):
+        try:
+            msg = json.loads(line).get("message")
+        except json.JSONDecodeError:
+            continue
+        if isinstance(msg, dict) and msg.get("usage"):
+            for key, n in (msg["usage"].get("cache_creation") or {}).items():
+                if n:
+                    ttl[key] += 1
+print(ttl)
+```
+
+```
+Counter({'ephemeral_1h_input_tokens': 12957})
+```
+
+Every cache write in nearly thirteen thousand requests used the one-hour TTL. That's what you'd expect on a subscription.
 
 When you stop talking, the timer keeps running.
 
 ## Doing the math
 
-I like to see the numbers, so here's a throwaway script:
+Here's what one message costs on a 400,000-token session:
 
 ```python
 INPUT = 4.00          # $ per million tokens, Opus 5.5
@@ -65,26 +92,50 @@ So the same message can cost eight cents or three dollars twenty. The only diffe
 
 That's about 40 times more for the identical message. Nothing about the work changed. The only thing that changed was the clock.
 
-If you're on a subscription and not paying per token, the same thing happens in a different currency. The cold rebuild counts against your usage limits, so a few long breaks can eat a surprising share of your allowance.
+On a subscription you don't pay per token, but the same thing happens in a different currency. The docs' section on [why usage climbs in a long session](https://code.claude.com/docs/en/costs#why-usage-climbs-in-a-long-session) lists "your first message after a break longer than the cache lifetime" as one of the reasons. The cold rebuild counts against your plan limits.
 
 ## Why before, and not after
 
 This is the part that took me a while to notice.
 
-`/compact` isn't free. To summarize a conversation, the model has to read the whole conversation, and that is the same 400,000-token read we've been talking about.
+`/compact` isn't free. To write the summary, Claude Code sends a separate request containing your system prompt, your tools, and the entire history it's about to summarize. That's the same big read we've been talking about. The docs on [compacting the conversation](https://code.claude.com/docs/en/prompt-caching#compacting-the-conversation) explain the consequence:
 
-If you compact before you leave, the cache is still warm. That big read is billed at cache-read prices, and what's left behind is a small summary, maybe 20,000 tokens. When you come back, the cache has expired, but rebuilding 20,000 tokens is cheap. For the cold 1-hour write in the table that's about sixteen cents, compared with $3.20.
+> While the cache is warm, that request reads your prefix from the cache. [...] After a break longer than the cache lifetime, there is no cache left to read, so the summarization request reprocesses that history as uncached input.
 
-If you compact after you come back, you get the worst of both. First you pay the cold price to reprocess all 400,000 tokens. Then you pay again to write the summary. That's full price to reread a long book only so you can write a one-page summary of it.
+Here's a real example. A few weeks ago I compacted a long session in one of my projects, and the transcript recorded the before and after:
+
+```
+trigger: manual   preTokens: 307806   postTokens: 15662   durationMs: 38401
+```
+
+At Opus 5.5 prices, here's what that compaction costs depending on when you run it:
+
+- **Compact before you leave, cache warm:** about 300k tokens at the $0.20 read rate is roughly **six cents**, plus the summary it writes. When you come back the cache has expired, but rebuilding 15,662 tokens at the one-hour write rate is about **twelve cents**.
+- **Compact after you come back, cache cold:** the summarizer reprocesses all 307,806 tokens as fresh input, so **$1.23 or more** before it has written a word.
+
+That's full price to reread a long book only so you can write a one-page summary of it.
 
 The same action costs very different amounts depending on when you do it. I like that about this tool, a little reluctantly. It rewards paying attention to things you can't see.
+
+## The tool already does this, sometimes
+
+While researching this post I found that Claude Code has a setting called [`idleCompaction`](https://code.claude.com/docs/en/settings-reference#idlecompaction), and it's on by default. When you've stepped away from a long conversation, it compacts the conversation for you. The catch is the conditions. All of these have to be true:
+
+- The conversation is on the one-hour TTL.
+- The context has reached a threshold, 200,000 tokens by default.
+- About an hour has passed since the last request.
+- **Your computer stays awake until then.**
+
+That last one made me laugh, because I'm on a laptop. Close the lid to go to lunch and the machine is asleep when the hour comes around, so idle compaction never runs. It also does nothing on the five-minute TTL. That's the API-key setup, which is exactly where every cold minute is billed in dollars.
+
+There's another sign of how much the Claude Code team cares about this. When it applies, `/usage` shows a recommendation row with the wording `Compact before you step away · run /compact`. They beat me to the title.
 
 ## The routine
 
 Before I step away, I ask myself three questions:
 
-1. **Will I be gone longer than the cache lasts?** A quick trip to refill water probably isn't. Lunch definitely is.
-2. **Is the context actually big?** A short session costs almost nothing to rebuild, so compacting it is ceremony with no payoff.
+1. **Will I be gone longer than the cache lasts?** That's an hour on a subscription and five minutes on an API key. Five minutes is a coffee. An hour is lunch.
+2. **Is the context actually big?** A short session costs almost nothing to rebuild, so compacting it is ceremony with no payoff. `/usage` shows whether the cache is warm and how big the last miss was.
 3. **Is there detail I can't afford to lose?** Compaction is a summary, and summaries are lossy. If I'm in the middle of a delicate debugging session where the exact error text matters, I'd rather pay for the cold restart.
 
 If the answers are yes, yes, and no, I compact. `/compact` also takes instructions, which helps when you know what matters:
@@ -93,7 +144,7 @@ If the answers are yes, yes, and no, I compact. `/compact` also takes instructio
 /compact keep the failing test name, the migration plan, and the open questions about the schema
 ```
 
-If I've actually finished the task, I skip `/compact` and use `/clear`. Summarizing work I'm done with is just a more expensive way to forget it.
+If I've actually finished the task, I skip `/compact` and use `/clear`. The docs put it plainly: "`/clear` costs nothing." Summarizing work I'm done with is just a more expensive way to forget it.
 
 ## Noticing the gap
 
