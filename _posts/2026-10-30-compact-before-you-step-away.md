@@ -6,7 +6,7 @@ categories: [tools, ai, development]
 tags: [claude, claude-code, prompt-caching, compaction, workflow]
 ---
 
-Before I get up from my desk I have a small routine. I save the file and write a quick commit message so I know where I left off. Then I check whether anything is still running in a terminal.
+The other day I was reading [this post](https://claude.com/es/resources/articles/claude-opus-5-5-built-for-coding-sessions-that-use-more-context) about how Opus 5.5 was built with longer coding sessions and use more context and how when I read this part "Compact before you step away rather than after" Before I get up from my desk I have a small routine. I save the file and write a quick commit message so I know where I left off. Then I check whether anything is still running in a terminal.
 
 Lately I've added one more step. If a Claude Code session has gotten long, I type `/compact` before I leave.
 
