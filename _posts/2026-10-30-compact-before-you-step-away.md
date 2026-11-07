@@ -3,96 +3,46 @@ layout: post
 title: "Compact Before You Step Away"
 date: 2026-10-30
 categories: [tools, ai, development]
-tags: [claude, claude-code, prompt-caching, compaction, workflow]
+tags: [claude, claude-code, prompt-caching, caching, compaction, workflow]
 ---
 
-The other day I was reading [this post](https://claude.com/es/resources/articles/claude-opus-5-5-built-for-coding-sessions-that-use-more-context) about how Opus 5.5 was built with longer coding sessions and use more context and how when I read this part "Compact before you step away rather than after" Before I get up from my desk I have a small routine. I save the file and write a quick commit message so I know where I left off. Then I check whether anything is still running in a terminal.
+[_this post was written by me, then edited by Claude and myself_]
 
-Lately I've added one more step. If a Claude Code session has gotten long, I type `/compact` before I leave.
+The other day I was reading [this post](https://claude.com/es/resources/articles/claude-opus-5-5-built-for-coding-sessions-that-use-more-context) about how Opus 5.5 was "_built with longer coding sessions and more context usage in mind_" when I read this recommendation right at the end of the article: 
 
-It looks like housekeeping, but it saves real money. The reason has to do with something that's easy to forget: the tool is paying attention to time even when you aren't.
+>"Compact before you step away rather than after"
 
-## Every turn re-reads everything
+This phrase stopped me in my tracks, because it was something I did very often. This affected me directly. 
 
-The model doesn't remember anything between turns. What looks like a conversation is really the whole transcript being sent again on every request. The [prompt caching docs](https://code.claude.com/docs/en/prompt-caching) spell it out: system prompt, project context, every prior message and tool result, and then your new message.
+Usually when I'm coding and it's late in the evening (I'm more of an early bird than a night owl) I just leave my laptop working and then I wake up the next day and just ask Claude "_where are we now?_" and Claude starts `Booping...`, `Thinking...`, `Flabbergasting...` and takes a few seconds (or minutes) before giving me an answer. 
+
+Turns out there's a good reason not to do this and I hadn't thought about it AT ALL.
+
+## Why cache
+
+The model doesn't remember anything between turns. What looks like a conversation is really the whole transcript being sent (back and forth) again on every request. The [prompt caching docs](https://code.claude.com/docs/en/prompt-caching) spell it out: system prompt, project context, every prior message and tool result, and then your new message.
 
 So once a session reaches 300,000 tokens, typing "thanks, that worked" makes the model process 300,000 tokens of history before it reads your four words.
 
-In my head a chat feels like a phone call, with the context just sitting there in the room. In practice it's closer to sending a letter with the whole correspondence stapled to the front, every time.
+In my head a chat feels like a phone call, with the context just sitting there in the room. But underneath it's more like sending a letter with the whole correspondence stapled to the front, every time. Cache is just making this whole "conversation" faster.
 
 ## The cache is what makes this bearable
 
-Reprocessing everything on every turn would be painfully expensive, so there's prompt caching. When a request starts with the same text as a recent one, the API reuses the work it already did on that shared prefix. Reading from the cache costs a small fraction of normal input.
+Reprocessing everything on every turn would be painfully expensive, so there's prompt caching. When a request starts with the same text as a recent one, the API reuses the work it already did on that shared prefix. Reading from the cache costs [a small fraction of normal input](https://platform.claude.com/docs/en/about-claude/pricing).
 
-Here are the numbers for Claude Opus 5.5, from the [official pricing page](https://platform.claude.com/docs/en/about-claude/pricing):
+I intentionally don't want this article to become a pitch about Claude caching costs or how to tune or set up these parameters. You can do that using Claude Code itself. I'm more into how we sometimes do good or in this case harm to ourselves, and our context/money usage out of unknown concepts.
 
-| | Price per million tokens |
-|---|---|
-| Normal input | $4.00 |
-| Cache read | $0.20 (5% of input) |
-| Cache write, 5-minute TTL | $5.00 (1.25x input) |
-| Cache write, 1-hour TTL | $8.00 (2x input) |
+## Cache expiring
+As you may know there's some caching going on while you go back and forth with Claude. Your (growing) conversation is being cached while you move forward, but this cache has an expiration. Then when you walk away for a long time that cache finally dies. At some point in time, your cache is released. So when you come back the next morning and say "hey, claude, what's up?", what Claude will do is read that massive conversation where you vibe-coded your whole new GUI all over again and store it AGAIN in cache. Only when it's done, Claude will finally give you a status.
 
-The catch is in the last two rows. **The cache expires.** Entries have a time-to-live, and each request that reads the cache resets its timer. As long as you keep talking, the cache stays warm and every turn costs very little.
+## What this means for you
 
-Which TTL you get depends on how you pay. According to the docs, Claude Code asks for the **one-hour** TTL for your main conversation when you're on a Claude subscription and within your plan's usage. With an API key, a cloud provider, or once you've spilled over into usage credits, it drops to **five minutes**. You can override either one with the [`promptCacheTtl`](https://code.claude.com/docs/en/settings-reference#promptcachettl) setting.
+So, basically, on that very first "Hey, Claude!" morning message, you're not only sending the greetings/status report message but the whole conversation you had in this window, which burns lots of your precious tokens right from the beginning by reprocessing the whole conversation (unnecessarily). I realized that's why sometimes I'm only a few minutes into the conversation and I'm already at 8-10% of my 5-hour window (I'm on the Pro plan rn).
 
-I didn't want to take that on faith, so I checked my own transcripts. Claude Code keeps them as JSONL files under `~/.claude/projects/`, and every assistant message records its cache usage:
+## What to do
+So, lately (when I remember) I've added one more step. If a Claude Code session has gotten long, I type `/compact` before I leave.
 
-```python
-import json, glob, collections
-
-ttl = collections.Counter()
-for path in glob.glob("/home/me/.claude/projects/*/*.jsonl"):
-    for line in open(path, errors="ignore"):
-        try:
-            msg = json.loads(line).get("message")
-        except json.JSONDecodeError:
-            continue
-        if isinstance(msg, dict) and msg.get("usage"):
-            for key, n in (msg["usage"].get("cache_creation") or {}).items():
-                if n:
-                    ttl[key] += 1
-print(ttl)
-```
-
-```
-Counter({'ephemeral_1h_input_tokens': 12957})
-```
-
-Every cache write in nearly thirteen thousand requests used the one-hour TTL. That's what you'd expect on a subscription.
-
-When you stop talking, the timer keeps running.
-
-## Doing the math
-
-Here's what one message costs on a 400,000-token session:
-
-```python
-INPUT = 4.00          # $ per million tokens, Opus 5.5
-READ = 0.05 * INPUT   # cache read
-WRITE_1H = 2 * INPUT  # cache write, 1-hour TTL
-WRITE_5M = 1.25 * INPUT
-
-context = 400_000     # tokens in a long-ish session
-
-for label, rate in [("warm cache", READ),
-                    ("cold, 5m TTL", WRITE_5M),
-                    ("cold, 1h TTL", WRITE_1H)]:
-    print(f"{label:>14}: ${context / 1e6 * rate:.2f}")
-```
-
-```
-    warm cache: $0.08
-  cold, 5m TTL: $2.00
-  cold, 1h TTL: $3.20
-```
-
-So the same message can cost eight cents or three dollars twenty. The only difference is whether you went to make coffee in between.
-
-That's about 40 times more for the identical message. Nothing about the work changed. The only thing that changed was the clock.
-
-On a subscription you don't pay per token, but the same thing happens in a different currency. The docs' section on [why usage climbs in a long session](https://code.claude.com/docs/en/costs#why-usage-climbs-in-a-long-session) lists "your first message after a break longer than the cache lifetime" as one of the reasons. The cold rebuild counts against your plan limits.
+It looks like housekeeping, but it saves a lot in context (and money if you're on the API).
 
 ## Why before, and not after
 
@@ -102,20 +52,9 @@ This is the part that took me a while to notice.
 
 > While the cache is warm, that request reads your prefix from the cache. [...] After a break longer than the cache lifetime, there is no cache left to read, so the summarization request reprocesses that history as uncached input.
 
-Here's a real example. A few weeks ago I compacted a long session in one of my projects, and the transcript recorded the before and after:
+So, compacting before leaving means the summary is built from the cached conversation (a cheaper read). If we do this later, with a cold cache, the summarizer reprocesses all those thousands of tokens as fresh input before it has written a word. That's full price to reread a long exchange of letters only so you can write a one-page summary of it.
 
-```
-trigger: manual   preTokens: 307806   postTokens: 15662   durationMs: 38401
-```
-
-At Opus 5.5 prices, here's what that compaction costs depending on when you run it:
-
-- **Compact before you leave, cache warm:** about 300k tokens at the $0.20 read rate is roughly **six cents**, plus the summary it writes. When you come back the cache has expired, but rebuilding 15,662 tokens at the one-hour write rate is about **twelve cents**.
-- **Compact after you come back, cache cold:** the summarizer reprocesses all 307,806 tokens as fresh input, so **$1.23 or more** before it has written a word.
-
-That's full price to reread a long book only so you can write a one-page summary of it.
-
-The same action costs very different amounts depending on when you do it. I like that about this tool, a little reluctantly. It rewards paying attention to things you can't see.
+The same action costs very different amounts depending on when you do it. I wondered if this could be tuned somehow...
 
 ## The tool already does this, sometimes
 
@@ -126,32 +65,20 @@ While researching this post I found that Claude Code has a setting called [`idle
 - About an hour has passed since the last request.
 - **Your computer stays awake until then.**
 
-That last one made me laugh, because I'm on a laptop. Close the lid to go to lunch and the machine is asleep when the hour comes around, so idle compaction never runs. It also does nothing on the five-minute TTL. That's the API-key setup, which is exactly where every cold minute is billed in dollars.
+That last one made me laugh, because I'm on a laptop. Close the lid to go to lunch (or sleep) and the machine is asleep when the hour comes around, so idle compaction never runs. It also does nothing on the five-minute TTL. Not to mention that not all my long conversations go above 200K tokens.
 
-There's another sign of how much the Claude Code team cares about this. When it applies, `/usage` shows a recommendation row with the wording `Compact before you step away · run /compact`. They beat me to the title.
+## What's next
 
-## The routine
+Currently, I'm working on building a skill which allows me to close the little open loops that sometimes happen in a conversation (like a bug Claude detects, or a new PR it recommends opening alongside current work, etc). I'm calling it `/close` but it still isn't giving me the expected results. It's way too picky. But the idea is there, to help free up some context before I leave.
 
-Before I step away, I ask myself three questions:
+## Nit
 
-1. **Will I be gone longer than the cache lasts?** That's an hour on a subscription and five minutes on an API key. Five minutes is a coffee. An hour is lunch.
-2. **Is the context actually big?** A short session costs almost nothing to rebuild, so compacting it is ceremony with no payoff. `/usage` shows whether the cache is warm and how big the last miss was.
-3. **Is there detail I can't afford to lose?** Compaction is a summary, and summaries are lossy. If I'm in the middle of a delicate debugging session where the exact error text matters, I'd rather pay for the cold restart.
-
-If the answers are yes, yes, and no, I compact. `/compact` also takes instructions, which helps when you know what matters:
+Not everyone knows that `/compact` also takes instructions, which helps when you know what matters:
 
 ```
-/compact keep the failing test name, the migration plan, and the open questions about the schema
+/compact keep the failing test name, the migration plan, and the open benchmark report
 ```
 
-If I've actually finished the task, I skip `/compact` and use `/clear`. The docs put it plainly: "`/clear` costs nothing." Summarizing work I'm done with is just a more expensive way to forget it.
+If you've actually finished the task, skip `/compact` and use `/clear`. The docs put it plainly: "`/clear` costs nothing." Summarizing work I'm done with is just wasting tokens.
 
-## Noticing the gap
-
-What I find interesting here isn't really the money. It's that the machine has no sense of my absence. It doesn't know I went for a walk or got pulled into a meeting. All it knows is that the clock ran out.
-
-Most of the tools I've learned well taught me something about their shape this way. You learn where the edges are and when the easy path stops being easy. Prompt caching has a time dimension that's invisible until you go looking for it. Once you see it, you start paying attention to pauses, and to the moment just before you get up from the desk.
-
-The cache doesn't care that you stepped away. It only knows how long you were gone.
-
-So compact first, then go get the coffee.
+So, next time you know you'll walk away for a long time, or until tomorrow, compact first, then go get the coffee (or some sleep).
